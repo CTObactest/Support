@@ -334,9 +334,21 @@ async def main_async_logic():
     async def health_check(request):
         return web.Response(text="OK")
 
-    app.web_app.router.add_get("/", health_check)
+    # Create and start the web server
+    web_app = web.Application()
+    web_app.router.add_get("/", health_check)
+    web_app.router.add_get("/health", health_check)
+    
+    # Start the web server
+    runner = web.AppRunner(web_app)
+    await runner.setup()
+    
+    port = int(os.getenv('PORT', 8080))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    logger.info(f"Web server started on port {port}")
 
-    # ✅ Start polling instead of webhook
+    # ✅ Start polling
     await app.bot.delete_webhook(drop_pending_updates=True)
     logger.info("Deleted webhook. Starting polling...")
 
@@ -353,6 +365,7 @@ async def main_async_logic():
         await app.updater.stop()
         await app.stop()
         await app.shutdown()
+        await runner.cleanup()
         logger.info("Application shut down gracefully.")
 
 
