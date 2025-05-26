@@ -191,15 +191,15 @@ class SupportBot:
         await self.handle_group_start(update, context)
 
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "❓ *How to use this bot:*\n\n"
-        "• Use /start to begin\n"
-        "• Use /connect to link support groups\n"
-        "• Use /disconnect to unlink\n"
-        "• Ask questions directly or use the buttons\n\n"
-        "ℹ️ You can also click 'Help' from the main menu!",
-        parse_mode="Markdown"
-    )
+        await update.message.reply_text(  # This line was not indented
+            "❓ *How to use this bot:*\n\n"
+            "• Use /start to begin\n"
+            "• Use /connect to link support groups\n"
+            "• Use /disconnect to unlink\n"
+            "• Ask questions directly or use the buttons\n\n"
+            "ℹ️ You can also click 'Help' from the main menu!",
+            parse_mode="Markdown"
+        )
 
     async def disconnect_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /disconnect command"""
