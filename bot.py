@@ -133,11 +133,14 @@ class SupportBot:
 
     # ––– /start –––
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        logger.info(f"Start command received from user {update.effective_user.id}")
+        
         user_data = context.user_data
         user_data.clear()
 
         # Group start ⇒ connect flow
         if update.effective_chat.type in {"group", "supergroup"}:
+            logger.info(f"Group start in {update.effective_chat.id}")
             await self.handle_group_start(update, context)
             return
 
@@ -150,13 +153,21 @@ class SupportBot:
         ]
         text = "Welcome! Choose an option below:"
         markup = InlineKeyboardMarkup(keyboard)
-        if update.message:
-            await update.message.reply_text(text, reply_markup=markup)
-        else:
-            await update.callback_query.edit_message_text(text, reply_markup=markup)
+        
+        try:
+            if update.message:
+                await update.message.reply_text(text, reply_markup=markup)
+                logger.info("Start menu sent successfully")
+            else:
+                await update.callback_query.edit_message_text(text, reply_markup=markup)
+                logger.info("Start menu edited successfully")
+        except Exception as e:
+            logger.error(f"Failed to send start menu: {e}")
 
     # ––– Messages –––
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        logger.info(f"Message received from user {update.effective_user.id}: {update.message.text if update.message else 'No text'}")
+        
         if not (msg := update.message) or not msg.text:
             return
 
@@ -168,6 +179,7 @@ class SupportBot:
         if any(g in text_lower for g in GREETING_KEYWORDS) and not flow:
             reply = "Hello! Use /start to see options." if len(text_lower.split()) <= 2 else "How can I help? Use /start for VIP or mentorship."
             await msg.reply_text(reply)
+            logger.info(f"Greeting response sent to user {update.effective_user.id}")
             return
 
         # Flow‑specific handlers (Deriv VIP, Mentorship, …)
@@ -185,6 +197,7 @@ class SupportBot:
         # Fallback
         if not flow:
             await msg.reply_text("Message received. Use /start for guided assistance.")
+            logger.info(f"Fallback response sent to user {update.effective_user.id}")
 
     # ––– Photos –––
     async def handle_photo(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -555,6 +568,10 @@ async def main():
         logger.error("Env vars TELEGRAM_BOT_TOKEN / MONGODB_URI not set.")
         return
 
+    logger.info("Starting bot initialization...")
+    logger.info(f"Bot token (first 10 chars): {bot_token[:10]}...")
+    logger.info(f"MongoDB URI (first 20 chars): {mongodb_uri[:20]}...")
+
     bot_app = SupportBot(bot_token, mongodb_uri)
     
     try:
@@ -566,30 +583,52 @@ async def main():
     # Setup Telegram bot
     application = Application.builder().token(bot_token).build()
 
+    # Test bot connection
+    try:
+        bot_info = await application.bot.get_me()
+        logger.info(f"Bot connected successfully: @{bot_info.username} ({bot_info.first_name})")
+    except Exception as e:
+        logger.error(f"Failed to connect to Telegram: {e}")
+        return
+
     application.add_handler(CommandHandler("start", bot_app.start_command))
     application.add_handler(CommandHandler("help", lambda u, c: u.message.reply_text("Use /start.")))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, bot_app.handle_message))
     application.add_handler(MessageHandler(filters.PHOTO, bot_app.handle_photo))
     application.add_handler(CallbackQueryHandler(bot_app.button_callback))
 
+    logger.info("Handlers registered successfully")
+
     # Setup health check server
     health_app = await create_health_server()
     
     # Start both servers concurrently
     async def run_bot():
-        await application.initialize()
-        await application.start()
-        await application.updater.start_polling()
-        logger.info("Telegram bot is running")
+        try:
+            await application.initialize()
+            await application.start()
+            await application.updater.start_polling(
+                allowed_updates=["message", "callback_query"],
+                drop_pending_updates=True
+            )
+            logger.info("Telegram bot polling started successfully")
+        except Exception as e:
+            logger.error(f"Failed to start bot polling: {e}")
+            raise
 
     async def run_health_server():
-        runner = web.AppRunner(health_app)
-        await runner.setup()
-        site = web.TCPSite(runner, '0.0.0.0', port)
-        await site.start()
-        logger.info(f"Health check server running on port {port}")
+        try:
+            runner = web.AppRunner(health_app)
+            await runner.setup()
+            site = web.TCPSite(runner, '0.0.0.0', port)
+            await site.start()
+            logger.info(f"Health check server running on port {port}")
+        except Exception as e:
+            logger.error(f"Failed to start health server: {e}")
+            raise
 
     # Run both concurrently
+    logger.info("Starting both bot and health server...")
     await asyncio.gather(
         run_bot(),
         run_health_server(),
