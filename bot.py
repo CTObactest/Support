@@ -844,3 +844,13 @@ async def main_async_logic():
         await app.shutdown()
         await runner.cleanup()
         logger.info("Application shut down gracefully.")
+
+
+
+if __name__ == '__main__':
+    try:
+        asyncio.run(main_async_logic())
+    except ValueError as ve: # Catch specific startup errors like missing tokens
+        logger.critical(f"Configuration error: {ve}")
+    except Exception as e:
+        logger.critical(f"Unhandled exception in main: {e}", exc_info=True)
