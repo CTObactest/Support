@@ -1,6 +1,7 @@
 import os
 import logging
 import asyncio
+from aiohttp import web
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from datetime import datetime, timedelta
@@ -291,15 +292,15 @@ class SupportBot:
 
 
 async def main_async_logic():
-    """Asynchronously sets up and runs the bot."""
-    # Configure logging (can be at module level as well)
+    import logging
+    from aiohttp import web
+
     logging.basicConfig(
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         level=logging.INFO
     )
-    global logger # Ensure logger is accessible if not already module-level
+    global logger
     logger = logging.getLogger(__name__)
-
 
     bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
     mongodb_uri = os.getenv('MONGODB_URI', 'mongodb://localhost:27017/')
@@ -308,21 +309,14 @@ async def main_async_logic():
         logger.critical("TELEGRAM_BOT_TOKEN environment variable is required")
         raise ValueError("TELEGRAM_BOT_TOKEN environment variable is required")
     if not mongodb_uri:
-        logger.critical("MONGODB_URI environment variable is required for database operations.")
-        # Depending on how critical DB is, you might raise ValueError or allow running with limited functionality.
+        logger.critical("MONGODB_URI environment variable is required")
         raise ValueError("MONGODB_URI environment variable is required.")
 
     support_bot = SupportBot(bot_token, mongodb_uri)
     await support_bot.init_database()
 
-    # Create PTB application
-    # Persistence can be added here if needed, e.g., for pending_tickets across restarts
-    # from telegram.ext import PicklePersistence
-    # persistence = PicklePersistence(filepath="bot_persistence")
-    # app_builder = Application.builder().token(bot_token).persistence(persistence)
     app_builder = Application.builder().token(bot_token)
     app = app_builder.build()
-
 
     # Add handlers
     app.add_handler(CommandHandler("start", support_bot.start_command))
@@ -332,73 +326,35 @@ async def main_async_logic():
     app.add_handler(CallbackQueryHandler(support_bot.button_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, support_bot.handle_message))
 
-    # ----- Core PTB Lifecycle -----
-    await app.initialize()  # Initializes Application, Bot, Updater. Bot.get_me() is called.
-    await app.start()       # Starts the Dispatcher and Updater (if polling based).
-
+    await app.initialize()
+    await app.start()
     logger.info("PTB Application initialized and started.")
 
-    port = int(os.getenv('PORT', 8080)) # Port from your logs
-     # e.g., https://your-app-name.koyeb.app
+    # 🔧 Add health check endpoint for Koyeb
+    async def health_check(request):
+        return web.Response(text="OK")
 
-    if webhook_url_env:
-        # Define a unique path for the webhook, e.g., using part of the bot token
-        url_path = bot_token.split(':')[-1][:16] # A bit longer and less guessable
-        full_webhook_url_for_telegram = f"{webhook_url_env.rstrip('/')}/{url_path}"
+    app.web_app.router.add_get("/", health_check)
 
-        logger.info(f"Attempting to start webhook mode. Uvicorn will listen on 0.0.0.0:{port} at path /{url_path}")
-        logger.info(f"Webhook URL to be set with Telegram: {full_webhook_url_for_telegram}")
+    # ✅ Start polling instead of webhook
+    await app.bot.delete_webhook(drop_pending_updates=True)
+    logger.info("Deleted webhook. Starting polling...")
 
-        await app.updater.start_webhook(
-            listen="0.0.0.0",
-            port=port,
-            url_path=url_path
-            # `webhook_url` is not passed here; it's for `set_webhook`
-        )
-        
-        # Set the webhook with Telegram
-        await app.bot.set_webhook(
-            url=full_webhook_url_for_telegram,
-            allowed_updates=Update.ALL_TYPES # Specify which updates your bot should receive
-            # Consider adding drop_pending_updates=True if you want to clear old updates on restart
-        )
-        logger.info(f"Webhook set with Telegram. Bot should be active and listening at {full_webhook_url_for_telegram}")
-        
-        # Keep the main coroutine alive. Uvicorn (started by start_webhook) runs in the background.
-        # This is a simple way to keep the script from exiting.
-        # For robust production, you'd handle signals (SIGINT, SIGTERM) to set this event.
-        stop_event = asyncio.Event()
-        try:
-            await stop_event.wait()
-        except (KeyboardInterrupt, SystemExit):
-            logger.info("Shutdown signal received.")
-        finally:
-            logger.info("Stopping webhook and shutting down application...")
-            await app.updater.stop() # Stops the uvicorn server gracefully
-            # await app.bot.delete_webhook() # Optionally delete webhook on shutdown
-            # logger.info("Webhook deleted.")
-            # app.stop() is not an async method for Application, await app.shutdown() handles it
-            
-    else: # Polling mode
-        logger.info("Starting bot in polling mode.")
-        await app.updater.start_polling(
-            allowed_updates=Update.ALL_TYPES
-            # Consider drop_pending_updates=True
-        )
-        logger.info("Polling started.")
-        stop_event = asyncio.Event()
-        try:
-            await stop_event.wait()
-        except (KeyboardInterrupt, SystemExit):
-            logger.info("Shutdown signal received.")
-        finally:
-            logger.info("Stopping poller and shutting down application...")
-            await app.updater.stop()
+    await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
+    logger.info("Bot is now polling Telegram for updates.")
 
-    # Shared shutdown for both modes
-    await app.stop()      # Stops the dispatcher.
-    await app.shutdown()  # Final cleanup, including persistence if used.
-    logger.info("Application shut down gracefully.")
+    stop_event = asyncio.Event()
+    try:
+        await stop_event.wait()
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("Shutdown signal received.")
+    finally:
+        logger.info("Stopping poller and shutting down application...")
+        await app.updater.stop()
+        await app.stop()
+        await app.shutdown()
+        logger.info("Application shut down gracefully.")
+
 
 
 if __name__ == '__main__':
