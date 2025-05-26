@@ -8,12 +8,13 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from bson import ObjectId
 import re
 
-# (Keep your SupportBot class and other methods as they were in the previous corrected version)
-# ... (SupportBot class definition and its methods) ...
-# For brevity, I'm omitting the SupportBot class here, but it should be included from your previous version.
-# Ensure all its methods (start_command, handle_group_start, etc.) are present.
+# Configure logging
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
-# === Paste your full SupportBot class here ===
 class SupportBot:
     def __init__(self, bot_token, mongodb_uri):
         self.bot_token = bot_token
@@ -140,7 +141,7 @@ class SupportBot:
         elif data == "create_ticket": await self.start_ticket_creation(query)
         elif data == "my_tickets": await self.show_user_tickets(query)
         elif data == "help": await self.show_help_inline(query)
-        elif data.startswith("connect_"): connection_code = data; await self.process_group_connection(query, connection_code) # Not data.replace("connect_", "") as code now is full
+        elif data.startswith("connect_"): connection_code = data; await self.process_group_connection(query, connection_code)
         elif data == "cancel_connection": await query.edit_message_text("❌ Connection request cancelled by user.")
         elif data.startswith("category_"): category = data.replace("category_", ""); await self.set_ticket_category(query, category)
         elif data.startswith("faq_cat_"): category_name = data.replace("faq_cat_", ""); await self.show_faq_for_category(query, category_name)
@@ -151,7 +152,7 @@ class SupportBot:
         elif data.startswith("close_"): ticket_id = data.split("_", 1)[1]; await self.handle_close_ticket(query, context, ticket_id)
 
     async def process_group_connection(self, query: Update.callback_query, connection_code_from_button: str):
-        actual_code = connection_code_from_button.replace("connect_", "") # Still need to extract if prefix is there
+        actual_code = connection_code_from_button.replace("connect_", "")
         connection_data = self.pending_connections.get(actual_code)
         if not connection_data: await query.edit_message_text("❌ Connection request invalid or already processed."); return
         if datetime.now() > connection_data["expires_at"]: del self.pending_connections[actual_code]; await query.edit_message_text("❌ Connection request expired."); return
