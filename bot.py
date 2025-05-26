@@ -768,51 +768,79 @@ class SupportBot:
 
 
 # === Main Application Setup ===
-async def main():
-    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
-    mongodb_uri = os.environ.get("MONGODB_URI")
+async def main_async_logic():
+    import logging
+    from aiohttp import web
 
-    if not bot_token or not mongodb_uri:
-        logger.error("TELEGRAM_BOT_TOKEN or MONGODB_URI environment variables not set.")
-        return
+    logging.basicConfig(
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        level=logging.INFO
+    )
+    global logger
+    logger = logging.getLogger(__name__)
 
-    bot_app = SupportBot(bot_token, mongodb_uri)
-    await bot_app.init_database()
+    bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
+    mongodb_uri = os.getenv('MONGODB_URI', 'mongodb://localhost:27017/')
 
-    application = Application.builder().token(bot_token).build()
+    if not bot_token:
+        logger.critical("TELEGRAM_BOT_TOKEN environment variable is required")
+        raise ValueError("TELEGRAM_BOT_TOKEN environment variable is required")
+    if not mongodb_uri:
+        logger.critical("MONGODB_URI environment variable is required")
+        raise ValueError("MONGODB_URI environment variable is required.")
 
-    # Add handlers for new flows
-    application.add_handler(CommandHandler("start", bot_app.start_command))
-    application.add_handler(CommandHandler("help", bot_app.help_command))
+    support_bot = SupportBot(bot_token, mongodb_uri)
+    await support_bot.init_database()
+
+    app_builder = Application.builder().token(bot_token)
+    app = app_builder.build()
+
+    # Add handlers
+    app.add_handler(CommandHandler("start", support_bot.start_command))
+    app.add_handler(CommandHandler("help", support_bot.help_command))
+    app.add_handler(CommandHandler("connect", support_bot.connect_command))
+    app.add_handler(CommandHandler("disconnect", support_bot.disconnect_command))
+    app.add_handler(CallbackQueryHandler(support_bot.button_callback))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, support_bot.handle_message))
+
+    await app.initialize()
+    await app.start()
+    logger.info("PTB Application initialized and started.")
+
+    # 🔧 Add health check endpoint for Koyeb
+    async def health_check(request):
+        return web.Response(text="OK")
+
+    # Create and start the web server
+    web_app = web.Application()
+    web_app.router.add_get("/", health_check)
+    web_app.router.add_get("/health", health_check)
     
-    # Group management commands
-    application.add_handler(CommandHandler("connect", bot_app.connect_command))
-    application.add_handler(CommandHandler("disconnect", bot_app.disconnect_command))
-
-    # Message handler needs to be more sophisticated for states
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, bot_app.handle_message))
-    application.add_handler(MessageHandler(filters.PHOTO, bot_app.handle_photo))
+    # Start the web server
+    runner = web.AppRunner(web_app)
+    await runner.setup()
     
-    application.add_handler(CallbackQueryHandler(bot_app.button_callback))
+    port = int(os.getenv('PORT', 8080))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    logger.info(f"Web server started on port {port}")
 
-    # Add other handlers from original bot if still needed (e.g., for general tickets, FAQ Browse)
-    # Example: If you still want the old "create_ticket" button to work for general inquiries:
-    # application.add_handler(CallbackQueryHandler(bot_app.button_callback, pattern="^create_ticket$")) 
-    # But ensure the button_callback logic for "create_ticket" is distinct or adapted.
+    # ✅ Start polling
+    await app.bot.delete_webhook(drop_pending_updates=True)
+    logger.info("Deleted webhook. Starting polling...")
 
-    logger.info("Bot starting...")
-    await application.initialize()
-    await application.start()
-    await application.updater.start_polling()
-    logger.info("Bot started and polling.")
-    
-    # Keep the application running
-    while True:
-        await asyncio.sleep(3600) # Sleep for an hour, or use a more robust keep-alive
+    await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
+    logger.info("Bot is now polling Telegram for updates.")
 
-
-if __name__ == '__main__':
-    # For local testing, you might set env vars here or use a .env file with python-dotenv
-    # os.environ["TELEGRAM_BOT_TOKEN"] = "YOUR_BOT_TOKEN"
-    # os.environ["MONGODB_URI"] = "YOUR_MONGODB_URI"
-    asyncio.run(main())
+    stop_event = asyncio.Event()
+    try:
+        await stop_event.wait()
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("Shutdown signal received.")
+    finally:
+        logger.info("Stopping poller and shutting down application...")
+        await app.updater.stop()
+        await app.stop()
+        await app.shutdown()
+        await runner.cleanup()
+        logger.info("Application shut down gracefully.")
