@@ -186,10 +186,103 @@ class SupportBot:
         if not flow:
             await msg.reply_text("Message received. Use /start for guided assistance.")
 
-    # ––– Photos ––– (unchanged except trimmed comments)
+    # ––– Photos –––
     async def handle_photo(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        # Keep original implementation in production
-        pass
+        if not update.message or not update.message.photo:
+            return
+        
+        user_data = context.user_data
+        flow = user_data.get("vip_or_mentorship_flow")
+        step = user_data.get("current_step")
+        
+        if flow == "deriv_vip" and step == "awaiting_deposit_proof":
+            await self.process_deriv_deposit_proof(update, context)
+        elif flow in ["currencies_octa", "currencies_vantage"] and step == "awaiting_deposit_proof":
+            await self.process_currencies_deposit_proof(update, context)
+        else:
+            await update.message.reply_text(
+                "📷 Photo received, but I'm not sure what it's for. Use /start to begin a process."
+            )
+
+    async def process_deriv_deposit_proof(self, update, context):
+        # Create VIP ticket
+        ticket_id = f"DERIV_VIP_{update.effective_user.id}_{int(datetime.now().timestamp())}"
+        user_data = context.user_data
+        
+        ticket_data = {
+            "ticket_id": ticket_id,
+            "user_id": update.effective_user.id,
+            "username": update.effective_user.username or "N/A",
+            "first_name": update.effective_user.first_name or "N/A",
+            "type": "deriv_vip",
+            "cr_number": user_data.get("deriv_cr_number"),
+            "creation_date": user_data.get("deriv_creation_date"),
+            "photo_file_id": update.message.photo[-1].file_id,
+            "status": "pending",
+            "created_at": datetime.now(),
+        }
+        
+        try:
+            await self.db.tickets.insert_one(ticket_data)
+            
+            await update.message.reply_text(
+                f"✅ **Deriv VIP Request Submitted!**\n\n"
+                f"📋 Ticket ID: `{ticket_id}`\n"
+                f"🔢 CR Number: {user_data.get('deriv_cr_number')}\n"
+                f"📅 Account Created: {user_data.get('deriv_creation_date')}\n\n"
+                f"Your deposit proof has been received and is under review. "
+                f"You'll be added to the VIP group within 24 hours if approved.\n\n"
+                f"Need help? Contact admin: {ADMIN_TELEGRAM_LINK}",
+                parse_mode="Markdown"
+            )
+            
+        except Exception as e:
+            logger.error(f"Failed to create Deriv VIP ticket: {e}")
+            await update.message.reply_text(
+                "❌ Error processing your request. Please try again or contact admin."
+            )
+        
+        context.user_data.clear()
+
+    async def process_currencies_deposit_proof(self, update, context):
+        user_data = context.user_data
+        flow = user_data.get("vip_or_mentorship_flow")
+        broker = "OctaFX" if flow == "currencies_octa" else "Vantage"
+        
+        ticket_id = f"{broker.upper()}_VIP_{update.effective_user.id}_{int(datetime.now().timestamp())}"
+        
+        ticket_data = {
+            "ticket_id": ticket_id,
+            "user_id": update.effective_user.id,
+            "username": update.effective_user.username or "N/A",
+            "first_name": update.effective_user.first_name or "N/A",
+            "type": f"currencies_vip_{broker.lower()}",
+            "broker": broker,
+            "photo_file_id": update.message.photo[-1].file_id,
+            "status": "pending",
+            "created_at": datetime.now(),
+        }
+        
+        try:
+            await self.db.tickets.insert_one(ticket_data)
+            
+            await update.message.reply_text(
+                f"✅ **{broker} VIP Request Submitted!**\n\n"
+                f"📋 Ticket ID: `{ticket_id}`\n"
+                f"🏦 Broker: {broker}\n\n"
+                f"Your deposit proof has been received and is under review. "
+                f"You'll be added to the Currencies Premium group within 24 hours if approved.\n\n"
+                f"Need help? Contact admin: {ADMIN_TELEGRAM_LINK}",
+                parse_mode="Markdown"
+            )
+            
+        except Exception as e:
+            logger.error(f"Failed to create {broker} VIP ticket: {e}")
+            await update.message.reply_text(
+                "❌ Error processing your request. Please try again or contact admin."
+            )
+        
+        context.user_data.clear()
 
     # ––– Buttons –––
     async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -215,30 +308,229 @@ class SupportBot:
             await self.start_command(update, context)
             return
 
-        # Add more callback handlers here as needed
+        # VIP Flow Handlers
+        if data == "vip_deriv_start":
+            user_data["vip_or_mentorship_flow"] = "deriv_vip"
+            user_data["current_step"] = "awaiting_deriv_creation_date"
+            
+            await query.edit_message_text(
+                f"📈 **Deriv VIP (Synthetic) Registration**\n\n"
+                f"Requirements:\n"
+                f"• Account opened via our link: {DERIV_AFFILIATE_LINK}\n"
+                f"• Account older than 30 days\n"
+                f"• Minimum deposit: ${MIN_DEPOSIT_DERIV_VIP} USD\n\n"
+                f"First, please enter your Deriv account creation date (YYYY-MM-DD format):"
+            )
+            return
+
+        if data == "vip_currencies_start":
+            user_data.clear()
+            keyboard = [
+                [InlineKeyboardButton("🟢 OctaFX", callback_data="currencies_octa_start")],
+                [InlineKeyboardButton("🔵 Vantage", callback_data="currencies_vantage_start")],
+                [InlineKeyboardButton("🔙 Back", callback_data="select_vip_type")],
+            ]
+            await query.edit_message_text(
+                "📊 **Currencies Premium Group**\n\nChoose your broker:",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            return
+
+        if data == "currencies_octa_start":
+            user_data["vip_or_mentorship_flow"] = "currencies_octa"
+            user_data["current_step"] = "awaiting_deposit_proof"
+            
+            await query.edit_message_text(
+                f"🟢 **OctaFX Premium Registration**\n\n"
+                f"{OCTAFX_INFO}\n\n"
+                f"After completing both steps, please upload a screenshot of your deposit (minimum ${MIN_DEPOSIT_CURRENCIES_OCTA} USD)."
+            )
+            return
+
+        if data == "currencies_vantage_start":
+            user_data["vip_or_mentorship_flow"] = "currencies_vantage"
+            user_data["current_step"] = "awaiting_deposit_proof"
+            
+            await query.edit_message_text(
+                f"🔵 **Vantage Premium Registration**\n\n"
+                f"{VANTAGE_INFO}\n\n"
+                f"After completing both steps, please upload a screenshot of your deposit (minimum ${MIN_DEPOSIT_CURRENCIES_VANTAGE} USD)."
+            )
+            return
+
+        # Mentorship Flow
+        if data == "free_mentorship_start":
+            user_data["vip_or_mentorship_flow"] = "mentorship"
+            user_data["current_step"] = "awaiting_mentorship_cr_number"
+            
+            await query.edit_message_text(
+                f"🎓 **Free Mentorship Program**\n\n"
+                f"Requirements:\n"
+                f"• Deriv account opened via our link: {DERIV_AFFILIATE_LINK}\n"
+                f"• Basic understanding of trading concepts\n"
+                f"• Commitment to learning\n\n"
+                f"Please provide your Deriv CR number to continue:"
+            )
+            return
         logger.debug("Unhandled callback: %s", data)
 
-    # ––– Existing helper methods (keep original implementations) –––
+    # ––– Helper Methods –––
     async def process_deriv_creation_date(self, update, context, date_text):
-        # Keep original implementation
-        pass
+        try:
+            # Parse date (expecting format like "2024-01-15" or similar)
+            creation_date = datetime.strptime(date_text.strip(), "%Y-%m-%d").date()
+            days_old = (date.today() - creation_date).days
+            
+            if days_old < 30:
+                await update.message.reply_text(
+                    f"⚠️ Your account is only {days_old} days old. "
+                    "Deriv VIP requires accounts older than 30 days. Please try again later."
+                )
+                context.user_data.clear()
+                return
+            
+            context.user_data["deriv_creation_date"] = date_text
+            context.user_data["current_step"] = "awaiting_deriv_cr_number"
+            
+            await update.message.reply_text(
+                "✅ Account age verified! Now please provide your Deriv CR number:"
+            )
+            
+        except ValueError:
+            await update.message.reply_text(
+                "❌ Invalid date format. Please use YYYY-MM-DD format (e.g., 2024-01-15):"
+            )
 
     async def process_deriv_cr_number(self, update, context, cr_number_text):
-        # Keep original implementation
-        pass
+        cr_number = cr_number_text.strip().upper()
+        
+        if cr_number not in CR_NUMBERS_LIST:
+            await update.message.reply_text(
+                f"❌ CR number {cr_number} not found in our affiliate list.\n"
+                f"Please open your account using our link: {DERIV_AFFILIATE_LINK}\n"
+                "Then provide the correct CR number."
+            )
+            return
+        
+        context.user_data["deriv_cr_number"] = cr_number
+        context.user_data["current_step"] = "awaiting_deposit_proof"
+        
+        await update.message.reply_text(
+            f"✅ CR number {cr_number} verified!\n\n"
+            f"Now please upload a screenshot showing your deposit of at least ${MIN_DEPOSIT_DERIV_VIP} USD.\n"
+            "The screenshot should clearly show the amount and your account details."
+        )
 
     async def process_mentorship_cr_number(self, update, context, cr_number_text):
-        # Keep original implementation
-        pass
+        cr_number = cr_number_text.strip().upper()
+        
+        if cr_number not in CR_NUMBERS_LIST:
+            await update.message.reply_text(
+                f"❌ CR number {cr_number} not found in our affiliate list.\n"
+                f"Please open your account using our link: {DERIV_AFFILIATE_LINK}\n"
+                "Then provide the correct CR number."
+            )
+            return
+        
+        # Create ticket for mentorship
+        ticket_id = f"MENTOR_{update.effective_user.id}_{int(datetime.now().timestamp())}"
+        
+        ticket_data = {
+            "ticket_id": ticket_id,
+            "user_id": update.effective_user.id,
+            "username": update.effective_user.username or "N/A",
+            "first_name": update.effective_user.first_name or "N/A",
+            "type": "mentorship",
+            "cr_number": cr_number,
+            "status": "pending",
+            "created_at": datetime.now(),
+        }
+        
+        try:
+            await self.db.tickets.insert_one(ticket_data)
+            
+            await update.message.reply_text(
+                f"🎓 **Mentorship Request Submitted!**\n\n"
+                f"📋 Ticket ID: `{ticket_id}`\n"
+                f"🔢 CR Number: {cr_number}\n\n"
+                f"Your request has been forwarded to our mentors. "
+                f"You'll be contacted within 24 hours.\n\n"
+                f"Need immediate help? Contact admin: {ADMIN_TELEGRAM_LINK}",
+                parse_mode="Markdown"
+            )
+            
+        except Exception as e:
+            logger.error(f"Failed to create mentorship ticket: {e}")
+            await update.message.reply_text(
+                "❌ Error processing your request. Please try again or contact admin."
+            )
+        
+        context.user_data.clear()
 
     async def show_user_tickets(self, query):
-        # Keep original implementation
         user_id = query.from_user.id
-        await query.edit_message_text("Loading your tickets...")
+        
+        try:
+            tickets = await self.db.tickets.find({"user_id": user_id}).sort("created_at", -1).limit(10).to_list(length=10)
+            
+            if not tickets:
+                await query.edit_message_text(
+                    "📊 **My Tickets**\n\nYou have no tickets yet.\n\nUse /start to create VIP or mentorship requests."
+                )
+                return
+            
+            text = "📊 **My Tickets**\n\n"
+            for ticket in tickets:
+                status_emoji = {"pending": "⏳", "approved": "✅", "rejected": "❌"}.get(ticket.get("status", "pending"), "❓")
+                created = ticket.get("created_at", datetime.now()).strftime("%Y-%m-%d %H:%M")
+                
+                text += (
+                    f"{status_emoji} **{ticket.get('type', 'Unknown').title()}**\n"
+                    f"🆔 `{ticket.get('ticket_id', 'N/A')}`\n"
+                    f"📅 {created}\n"
+                    f"📊 Status: {ticket.get('status', 'pending').title()}\n\n"
+                )
+            
+            keyboard = [[InlineKeyboardButton("🔙 Back to Menu", callback_data="start_command_reset")]]
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+            
+        except Exception as e:
+            logger.error(f"Error fetching user tickets: {e}")
+            await query.edit_message_text("❌ Error loading tickets. Please try again later.")
 
     async def handle_group_start(self, update, context):
-        # Keep original implementation
-        pass
+        chat_id = update.effective_chat.id
+        chat_title = update.effective_chat.title or "Unknown Group"
+        
+        # Store group connection request
+        group_data = {
+            "group_id": chat_id,
+            "group_title": chat_title,
+            "status": "pending",
+            "requested_at": datetime.now(),
+        }
+        
+        try:
+            await self.db.groups.update_one(
+                {"group_id": chat_id},
+                {"$set": group_data},
+                upsert=True
+            )
+            
+            await update.message.reply_text(
+                f"🤖 **Bot Connection Request**\n\n"
+                f"Group: {chat_title}\n"
+                f"ID: `{chat_id}`\n\n"
+                f"Connection request logged. Admin will review and activate the bot for this group.\n\n"
+                f"Contact admin: {ADMIN_TELEGRAM_LINK}",
+                parse_mode="Markdown"
+            )
+            
+        except Exception as e:
+            logger.error(f"Failed to store group connection: {e}")
+            await update.message.reply_text(
+                "❌ Error processing group connection request. Please contact admin directly."
+            )
 
 
 # ––– Health Check Server –––
@@ -311,4 +603,3 @@ if __name__ == "__main__":
         logger.info("Bot stopped by user")
     except Exception as e:
         logger.error(f"Bot crashed: {e}")
-
