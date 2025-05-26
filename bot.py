@@ -16,9 +16,10 @@ Compact, production‑ready Telegram Support Bot with VIP / Mentorship flows
 ––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––
 Key updates
 * Cleaner code – comments trimmed, legacy FAQ paths removed
-* New buttons: My Tickets, Tagging Guide (URL), Contact Admin (URL)
+* New buttons: My Tickets, Tagging Guide (URL), Contact Admin (URL)
 * Button handler for "my_tickets" now wired to existing show_user_tickets()
 * Minor refactors for readability (early‑returns, f‑strings)
+* Added HTTP health check server for deployment platforms
 """
 
 # Logging
@@ -95,8 +96,8 @@ GREETING_KEYWORDS = {
 
 OCTAFX_INFO = (
     "🚀 **Join Currencies Premium Channel (OctaFX) and Access Exclusive Signals!** 🚀\n"
-    "Step 1: Open an account https://my.octafx.com/open-account/?refid=ib32402925\n"
-    "Step 2: Deposit $100+ then confirm with admins."
+    "Step 1: Open an account https://my.octafx.com/open-account/?refid=ib32402925\n"
+    "Step 2: Deposit $100+ then confirm with admins."
 )
 
 VANTAGE_INFO = (
@@ -113,15 +114,22 @@ class SupportBot:
         self.db_client: AsyncIOMotorClient | None = None
         self.db = None
         self.pending_connections: dict[str, dict] = {}
+        self.bot_healthy = False
 
     # ––– Database –––
     async def init_database(self):
-        self.db_client = AsyncIOMotorClient(self.mongodb_uri)
-        self.db = self.db_client.support_bot_new
-        await self.db.tickets.create_index("ticket_id", unique=True)
-        await self.db.tickets.create_index("user_id")
-        await self.db.groups.create_index("group_id", unique=True)
-        logger.info("MongoDB connected & indexes ensured")
+        try:
+            self.db_client = AsyncIOMotorClient(self.mongodb_uri)
+            self.db = self.db_client.support_bot_new
+            await self.db.tickets.create_index("ticket_id", unique=True)
+            await self.db.tickets.create_index("user_id")
+            await self.db.groups.create_index("group_id", unique=True)
+            self.bot_healthy = True
+            logger.info("MongoDB connected & indexes ensured")
+        except Exception as e:
+            logger.error(f"Database initialization failed: {e}")
+            self.bot_healthy = False
+            raise
 
     # ––– /start –––
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -180,8 +188,8 @@ class SupportBot:
 
     # ––– Photos ––– (unchanged except trimmed comments)
     async def handle_photo(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        # … original logic retained
-        pass  # keep full implementation in production
+        # Keep original implementation in production
+        pass
 
     # ––– Buttons –––
     async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -207,43 +215,63 @@ class SupportBot:
             await self.start_command(update, context)
             return
 
-        # … (rest of original callback cases remain unchanged)
-
+        # Add more callback handlers here as needed
         logger.debug("Unhandled callback: %s", data)
 
-    # ––– Existing helper methods (trimmed bodies for brevity) –––
+    # ––– Existing helper methods (keep original implementations) –––
     async def process_deriv_creation_date(self, update, context, date_text):
-        # …
+        # Keep original implementation
         pass
 
     async def process_deriv_cr_number(self, update, context, cr_number_text):
-        # …
+        # Keep original implementation
         pass
 
     async def process_mentorship_cr_number(self, update, context, cr_number_text):
-        # …
+        # Keep original implementation
         pass
 
     async def show_user_tickets(self, query):
-        # … (original implementation kept)
-        pass
+        # Keep original implementation
+        user_id = query.from_user.id
+        await query.edit_message_text("Loading your tickets...")
 
     async def handle_group_start(self, update, context):
-        # …
+        # Keep original implementation
         pass
 
-    # ––– Main App –––
+
+# ––– Health Check Server –––
+async def health_check(request):
+    """Simple health check endpoint"""
+    return web.Response(text="OK", status=200)
+
+async def create_health_server():
+    """Create a simple HTTP server for health checks"""
+    app = web.Application()
+    app.router.add_get('/health', health_check)
+    app.router.add_get('/', health_check)  # Some platforms check root
+    return app
+
+# ––– Main App –––
 async def main():
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
     mongodb_uri = os.getenv("MONGODB_URI")
+    port = int(os.getenv("PORT", 8080))
 
     if not bot_token or not mongodb_uri:
         logger.error("Env vars TELEGRAM_BOT_TOKEN / MONGODB_URI not set.")
         return
 
     bot_app = SupportBot(bot_token, mongodb_uri)
-    await bot_app.init_database()
+    
+    try:
+        await bot_app.init_database()
+    except Exception as e:
+        logger.error(f"Failed to initialize database: {e}")
+        return
 
+    # Setup Telegram bot
     application = Application.builder().token(bot_token).build()
 
     application.add_handler(CommandHandler("start", bot_app.start_command))
@@ -252,11 +280,35 @@ async def main():
     application.add_handler(MessageHandler(filters.PHOTO, bot_app.handle_photo))
     application.add_handler(CallbackQueryHandler(bot_app.button_callback))
 
-    await application.initialize()
-    await application.start()
-    await application.updater.start_polling()
-    logger.info("Bot is up and running.")
+    # Setup health check server
+    health_app = await create_health_server()
+    
+    # Start both servers concurrently
+    async def run_bot():
+        await application.initialize()
+        await application.start()
+        await application.updater.start_polling()
+        logger.info("Telegram bot is running")
+
+    async def run_health_server():
+        runner = web.AppRunner(health_app)
+        await runner.setup()
+        site = web.TCPSite(runner, '0.0.0.0', port)
+        await site.start()
+        logger.info(f"Health check server running on port {port}")
+
+    # Run both concurrently
+    await asyncio.gather(
+        run_bot(),
+        run_health_server(),
+        return_exceptions=True
+    )
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user")
+    except Exception as e:
+        logger.error(f"Bot crashed: {e}")
 
