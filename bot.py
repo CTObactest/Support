@@ -563,7 +563,7 @@ async def main_async_logic():
 
     # Command handlers
     app.add_handler(CommandHandler("start", support_bot.start_command))
-    app.add_handler(CommandHandler("help", support_bot.help_command))
+    app.add_handler(CommandHandler("help", support_bot.show_help_inline))
     app.add_handler(CommandHandler("connect", support_bot.connect_command))
     app.add_handler(CommandHandler("disconnect", support_bot.disconnect_command))
 
