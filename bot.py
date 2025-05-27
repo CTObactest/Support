@@ -691,11 +691,6 @@ class SupportBot:
     #  Main text message handler (includes verification FSM)
     # -------------------------------------------------------------
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    # -------------------------------------------------------------
-    #  Main text message handler (includes verification FSM)
-    # -------------------------------------------------------------
-    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not update.message:
             return
 
