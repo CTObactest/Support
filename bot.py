@@ -604,11 +604,7 @@ async def main():
     
     # Start both servers concurrently
     async def run_bot():
-    """
-    Starts the Telegram bot in polling mode (python-telegram-bot v20+).
-    Blocks until the bot is stopped or an exception is raised.
-    """
-    try:
+        try:
         await application.run_polling(
             allowed_updates=["message", "callback_query"],
             drop_pending_updates=True
