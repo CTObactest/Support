@@ -615,19 +615,27 @@ async def main():
     health_app = await create_health_server()
     
     # Define bot and server runners
-    async def run_bot():
-        try:
-            logger.info("Starting bot polling...")
-            await application.run_polling(
-                allowed_updates=["message", "callback_query"],
-                drop_pending_updates=True,
-                poll_interval=1.0,
-                timeout=10
-            )
-            logger.info("Telegram bot polling exited normally")
-        except Exception as e:
-            logger.error(f"Bot polling crashed: {e}")
-            raise
+    async def run_bot() -> None:
+    try:
+        logger.info("Initialising Telegram bot …")
+        await application.initialize()          # prepare
+        await application.start()               # start receiving updates
+        await application.updater.start_polling(allowed_updates=["message", "callback_query"],
+                                                drop_pending_updates=True,
+                                                poll_interval=1.0,
+                                                timeout=10)
+        logger.info("Bot polling started ✓")
+
+        # Block here until a stop signal (Ctrl-C, SIGTERM, etc.)
+        await application.updater.idle()
+
+    finally:
+        # Graceful shutdown
+        logger.info("Stopping Telegram bot …")
+        await application.updater.stop()
+        await application.stop()
+        await application.shutdown()
+
 
     async def run_health_server():
         try:
