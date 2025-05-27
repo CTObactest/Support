@@ -604,17 +604,20 @@ async def main():
     
     # Start both servers concurrently
     async def run_bot():
-        try:
-            await application.initialize()
-            await application.start()
-            await application.updater.start_polling(
-                allowed_updates=["message", "callback_query"],
-                drop_pending_updates=True
-            )
-            logger.info("Telegram bot polling started successfully")
-        except Exception as e:
-            logger.error(f"Failed to start bot polling: {e}")
-            raise
+    """
+    Starts the Telegram bot in polling mode (python-telegram-bot v20+).
+    Blocks until the bot is stopped or an exception is raised.
+    """
+    try:
+        await application.run_polling(
+            allowed_updates=["message", "callback_query"],
+            drop_pending_updates=True
+        )
+        logger.info("Telegram bot polling exited normally")
+    except Exception as e:
+        logger.error(f"Bot polling crashed: {e}")
+        raise
+
 
     async def run_health_server():
         try:
