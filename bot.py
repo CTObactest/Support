@@ -92,6 +92,27 @@ class SupportBot:
         cursor = self.db.groups.find({"status": "active"})
         return await cursor.to_list(length=None)
 
+    async def search_knowledge_base(self, query: str):
+        """Search the knowledge base for relevant answers"""
+        query_words = query.lower().split()
+        search_conditions = []
+        
+        for word in query_words:
+            search_conditions.extend([
+                {"question": {"$regex": word, "$options": "i"}},
+                {"answer": {"$regex": word, "$options": "i"}},
+                {"keywords": {"$in": [word]}}
+            ])
+        
+        if not search_conditions:
+            return []
+        
+        cursor = self.db.knowledge_base.find({
+            "$or": search_conditions
+        }).limit(3)
+        
+        return await cursor.to_list(length=None)
+
     # -------------------------------------------------------------
     #  /start & Main Menu
     # -------------------------------------------------------------
@@ -121,6 +142,111 @@ class SupportBot:
         elif update.callback_query:
             await update.callback_query.edit_message_text(welcome_text, reply_markup=reply_markup, parse_mode="Markdown")
 
+    async def handle_group_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /start command in groups"""
+        await update.message.reply_text(
+            "👋 Hello! I'm the FOREX-Backtest support bot. Use /connect to set up this group for ticket notifications."
+        )
+
+    # -------------------------------------------------------------
+    #  Help Command
+    # -------------------------------------------------------------
+    async def show_help_inline(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show help information"""
+        help_text = (
+            "🆘 *FOREX-Backtest Support Bot Help*\n\n"
+            "**Available Commands:**\n"
+            "• `/start` - Show main menu\n"
+            "• `/help` - Show this help message\n"
+            "• `/connect` - Connect group for support notifications\n"
+            "• `/disconnect` - Disconnect group from notifications\n\n"
+            "**Features:**\n"
+            "• VIP verification and premium access\n"
+            "• Free mentorship enrollment\n"
+            "• Support ticket system\n"
+            "• FAQ and knowledge base\n\n"
+            "**VIP Services:**\n"
+            "• *Deriv VIP* - Premium Deriv signals\n"
+            "• *Currencies VIP* - Premium currency signals\n"
+            "• *Free Mentorship* - Educational support\n\n"
+            "For technical support, create a ticket using the main menu."
+        )
+        
+        keyboard = [[InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu")]]
+        
+        if update.message:
+            await update.message.reply_text(help_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        elif update.callback_query:
+            await update.callback_query.edit_message_text(help_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+    # -------------------------------------------------------------
+    #  Group Connection Commands
+    # -------------------------------------------------------------
+    async def connect_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Connect a group to receive support notifications"""
+        if update.effective_chat.type not in ["group", "supergroup"]:
+            await update.message.reply_text("This command can only be used in groups.")
+            return
+        
+        # Check if user is admin
+        try:
+            member = await context.bot.get_chat_member(update.effective_chat.id, update.effective_user.id)
+            if member.status not in ["administrator", "creator"]:
+                await update.message.reply_text("Only group administrators can connect the group.")
+                return
+        except Exception as e:
+            logger.error(f"Error checking admin status: {e}")
+            await update.message.reply_text("Error checking permissions.")
+            return
+        
+        group_id = update.effective_chat.id
+        group_name = update.effective_chat.title or "Unknown Group"
+        
+        # Check if already connected
+        existing = await self.db.groups.find_one({"group_id": group_id})
+        if existing:
+            await update.message.reply_text("This group is already connected for support notifications.")
+            return
+        
+        # Add to database
+        await self.db.groups.insert_one({
+            "group_id": group_id,
+            "group_name": group_name,
+            "status": "active",
+            "connected_at": datetime.utcnow(),
+            "connected_by": update.effective_user.id
+        })
+        
+        await update.message.reply_text(
+            f"✅ Group '{group_name}' has been connected for support ticket notifications."
+        )
+
+    async def disconnect_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Disconnect a group from receiving support notifications"""
+        if update.effective_chat.type not in ["group", "supergroup"]:
+            await update.message.reply_text("This command can only be used in groups.")
+            return
+        
+        # Check if user is admin
+        try:
+            member = await context.bot.get_chat_member(update.effective_chat.id, update.effective_user.id)
+            if member.status not in ["administrator", "creator"]:
+                await update.message.reply_text("Only group administrators can disconnect the group.")
+                return
+        except Exception as e:
+            logger.error(f"Error checking admin status: {e}")
+            await update.message.reply_text("Error checking permissions.")
+            return
+        
+        group_id = update.effective_chat.id
+        
+        # Remove from database
+        result = await self.db.groups.delete_one({"group_id": group_id})
+        if result.deleted_count > 0:
+            await update.message.reply_text("✅ Group has been disconnected from support notifications.")
+        else:
+            await update.message.reply_text("This group was not connected.")
+
     # -------------------------------------------------------------
     #  VIP / Mentorship flow (callback entry‑point)
     # -------------------------------------------------------------
@@ -137,6 +263,330 @@ class SupportBot:
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="Markdown",
         )
+
+    # -------------------------------------------------------------
+    #  FAQ Functions
+    # -------------------------------------------------------------
+    async def show_faq_categories(self, query):
+        """Show available FAQ categories"""
+        categories = await self.db.knowledge_base.distinct("category")
+        if not categories:
+            await query.edit_message_text(
+                "📚 No FAQ categories available yet.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="back_to_menu")]])
+            )
+            return
+        
+        keyboard = []
+        for category in categories:
+            keyboard.append([InlineKeyboardButton(f"📂 {category.title()}", callback_data=f"faq_cat_{category}")])
+        keyboard.append([InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu")])
+        
+        await query.edit_message_text(
+            "📚 *FAQ Categories*\n\nSelect a category to browse:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown"
+        )
+
+    async def show_faq_for_category(self, query, category):
+        """Show FAQ items for a specific category"""
+        cursor = self.db.knowledge_base.find({"category": category})
+        items = await cursor.to_list(length=None)
+        
+        if not items:
+            await query.edit_message_text(
+                f"No FAQ items found for category '{category}'.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="faq")]])
+            )
+            return
+        
+        keyboard = []
+        for item in items[:10]:  # Limit to 10 items
+            keyboard.append([InlineKeyboardButton(f"❓ {item['question'].title()}", callback_data=f"faq_item_{item['_id']}")])
+        keyboard.append([InlineKeyboardButton("🔙 Back to Categories", callback_data="faq")])
+        
+        await query.edit_message_text(
+            f"📚 *{category.title()} FAQ*\n\nSelect a question:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown"
+        )
+
+    async def show_faq_answer(self, query, item_id):
+        """Show the answer for a specific FAQ item"""
+        try:
+            item = await self.db.knowledge_base.find_one({"_id": ObjectId(item_id)})
+            if not item:
+                await query.edit_message_text("FAQ item not found.")
+                return
+            
+            answer_text = (
+                f"❓ *{item['question'].title()}*\n\n"
+                f"{item['answer']}"
+            )
+            
+            keyboard = [
+                [InlineKeyboardButton("🔙 Back to Category", callback_data=f"faq_cat_{item['category']}")],
+                [InlineKeyboardButton("🏠 Main Menu", callback_data="back_to_menu")]
+            ]
+            
+            await query.edit_message_text(
+                answer_text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            logger.error(f"Error showing FAQ answer: {e}")
+            await query.edit_message_text("Error retrieving FAQ item.")
+
+    # -------------------------------------------------------------
+    #  Ticket System Functions
+    # -------------------------------------------------------------
+    async def start_ticket_creation(self, query):
+        """Start the ticket creation process"""
+        user_id = query.from_user.id
+        
+        categories = [
+            "Technical Support",
+            "Account Issues", 
+            "VIP Access",
+            "Mentorship",
+            "General Question",
+            "Bug Report"
+        ]
+        
+        keyboard = []
+        for category in categories:
+            keyboard.append([InlineKeyboardButton(f"📂 {category}", callback_data=f"category_{category.lower().replace(' ', '_')}")])
+        keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="back_to_menu")])
+        
+        await query.edit_message_text(
+            "🎫 *Create Support Ticket*\n\nPlease select a category:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown"
+        )
+
+    async def set_ticket_category(self, query, category):
+        """Set the ticket category and ask for description"""
+        user_id = query.from_user.id
+        
+        # Initialize ticket creation state
+        self.pending_tickets[user_id] = {
+            "category": category.replace("_", " ").title(),
+            "step": "description"
+        }
+        
+        await query.edit_message_text(
+            f"🎫 *New Ticket: {category.replace('_', ' ').title()}*\n\n"
+            "Please describe your issue or question in detail. Be as specific as possible."
+        )
+
+    async def process_ticket_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE, message_text: str):
+        """Process user input for ticket creation"""
+        user_id = update.effective_user.id
+        
+        if user_id not in self.pending_tickets:
+            return
+        
+        ticket_data = self.pending_tickets[user_id]
+        
+        if ticket_data["step"] == "description":
+            # Create the ticket
+            ticket_id = f"TKT-{datetime.utcnow().strftime('%Y%m%d')}-{int(datetime.utcnow().timestamp())%100000:05d}"
+            
+            ticket_doc = {
+                "ticket_id": ticket_id,
+                "user_id": user_id,
+                "user_info": {
+                    "id": user_id,
+                    "username": update.effective_user.username,
+                    "name": f"{update.effective_user.first_name or ''} {update.effective_user.last_name or ''}".strip() or update.effective_user.username or "N/A",
+                },
+                "category": ticket_data["category"],
+                "description": message_text,
+                "status": "open",
+                "priority": "normal",
+                "created_at": datetime.utcnow(),
+                "updated_at": datetime.utcnow(),
+                "messages": []
+            }
+            
+            await self.db.tickets.insert_one(ticket_doc)
+            
+            # Clean up state
+            del self.pending_tickets[user_id]
+            
+            # Notify user
+            keyboard = [
+                [InlineKeyboardButton("📊 View My Tickets", callback_data="my_tickets")],
+                [InlineKeyboardButton("🏠 Main Menu", callback_data="back_to_menu")]
+            ]
+            
+            await update.message.reply_text(
+                f"✅ *Ticket Created*\n\n"
+                f"**Ticket ID:** {ticket_id}\n"
+                f"**Category:** {ticket_data['category']}\n\n"
+                "Our support team will respond soon.",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="Markdown"
+            )
+            
+            # Forward to support groups
+            await self.forward_to_support_groups(context, ticket_doc)
+
+    async def show_user_tickets(self, query):
+        """Show user's tickets"""
+        user_id = query.from_user.id
+        
+        cursor = self.db.tickets.find({"user_id": user_id}).sort("created_at", -1)
+        tickets = await cursor.to_list(length=None)
+        
+        if not tickets:
+            await query.edit_message_text(
+                "📊 *My Tickets*\n\nYou haven't created any tickets yet.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="back_to_menu")]]),
+                parse_mode="Markdown"
+            )
+            return
+        
+        keyboard = []
+        for ticket in tickets[:10]:  # Show latest 10
+            status_emoji = "🟢" if ticket["status"] == "open" else "🔴" if ticket["status"] == "closed" else "🟡"
+            keyboard.append([InlineKeyboardButton(
+                f"{status_emoji} {ticket['ticket_id']} - {ticket['category']}", 
+                callback_data=f"ticket_{ticket['ticket_id']}"
+            )])
+        
+        keyboard.append([InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu")])
+        
+        await query.edit_message_text(
+            "📊 *My Tickets*\n\nSelect a ticket to view details:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown"
+        )
+
+    async def show_ticket_details(self, query, ticket_id):
+        """Show details of a specific ticket"""
+        ticket = await self.db.tickets.find_one({"ticket_id": ticket_id})
+        
+        if not ticket:
+            await query.edit_message_text("Ticket not found.")
+            return
+        
+        status_emoji = "🟢" if ticket["status"] == "open" else "🔴" if ticket["status"] == "closed" else "🟡"
+        created_date = ticket["created_at"].strftime("%Y-%m-%d %H:%M")
+        
+        ticket_text = (
+            f"🎫 *Ticket Details*\n\n"
+            f"**ID:** {ticket['ticket_id']}\n"
+            f"**Status:** {status_emoji} {ticket['status'].title()}\n"
+            f"**Category:** {ticket['category']}\n"
+            f"**Created:** {created_date}\n"
+            f"**Priority:** {ticket.get('priority', 'normal').title()}\n\n"
+            f"**Description:**\n{ticket['description']}"
+        )
+        
+        if len(ticket.get('messages', [])) > 0:
+            ticket_text += f"\n\n**Messages:** {len(ticket['messages'])}"
+        
+        keyboard = [[InlineKeyboardButton("🔙 Back to My Tickets", callback_data="my_tickets")]]
+        
+        await query.edit_message_text(
+            ticket_text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown"
+        )
+
+    async def forward_to_support_groups(self, context: ContextTypes.DEFAULT_TYPE, ticket_doc: dict):
+        """Forward new ticket to support groups"""
+        groups = await self.get_support_groups()
+        
+        notification_text = (
+            f"🎫 *New Support Ticket*\n\n"
+            f"**ID:** {ticket_doc['ticket_id']}\n"
+            f"**Category:** {ticket_doc['category']}\n"
+            f"**Priority:** {ticket_doc.get('priority', 'normal').title()}\n"
+            f"**User:** {ticket_doc['user_info']['name']}\n"
+            f"**Username:** @{ticket_doc['user_info']['username'] or 'N/A'}\n\n"
+            f"**Description:**\n{ticket_doc['description']}"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("✅ Take Ticket", callback_data=f"take_{ticket_doc['ticket_id']}")],
+            [InlineKeyboardButton("❌ Close Ticket", callback_data=f"close_{ticket_doc['ticket_id']}")]
+        ]
+        
+        # Get bot instance from application if context not available
+        bot = context.bot if context else None
+        if not bot:
+            # This is a fallback - in production you'd want to store bot reference
+            return
+        
+        for group in groups:
+            try:
+                await bot.send_message(
+                    chat_id=group["group_id"],
+                    text=notification_text,
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    parse_mode="Markdown"
+                )
+            except Exception as e:
+                logger.error(f"Error forwarding to group {group['group_id']}: {e}")
+
+    async def handle_take_ticket(self, query, context: ContextTypes.DEFAULT_TYPE, ticket_id: str):
+        """Handle taking a ticket by support staff"""
+        ticket = await self.db.tickets.find_one({"ticket_id": ticket_id})
+        if not ticket:
+            await query.answer("Ticket not found.")
+            return
+        
+        if ticket["status"] != "open":
+            await query.answer("Ticket is no longer open.")
+            return
+        
+        # Update ticket
+        await self.db.tickets.update_one(
+            {"ticket_id": ticket_id},
+            {
+                "$set": {
+                    "status": "assigned",
+                    "assigned_to": query.from_user.id,
+                    "assigned_at": datetime.utcnow(),
+                    "updated_at": datetime.utcnow()
+                }
+            }
+        )
+        
+        await query.answer(f"Ticket {ticket_id} assigned to you.")
+        
+        # Update the message
+        new_text = query.message.text + f"\n\n✅ *Taken by:* @{query.from_user.username or query.from_user.first_name}"
+        await query.edit_message_text(new_text, parse_mode="Markdown")
+
+    async def handle_close_ticket(self, query, context: ContextTypes.DEFAULT_TYPE, ticket_id: str):
+        """Handle closing a ticket"""
+        ticket = await self.db.tickets.find_one({"ticket_id": ticket_id})
+        if not ticket:
+            await query.answer("Ticket not found.")
+            return
+        
+        # Update ticket
+        await self.db.tickets.update_one(
+            {"ticket_id": ticket_id},
+            {
+                "$set": {
+                    "status": "closed",
+                    "closed_by": query.from_user.id,
+                    "closed_at": datetime.utcnow(),
+                    "updated_at": datetime.utcnow()
+                }
+            }
+        )
+        
+        await query.answer(f"Ticket {ticket_id} closed.")
+        
+        # Update the message
+        new_text = query.message.text + f"\n\n❌ *Closed by:* @{query.from_user.username or query.from_user.first_name}"
+        await query.edit_message_text(new_text, parse_mode="Markdown")
 
     # -------------------------------------------------------------
     #  Callback dispatcher
@@ -162,7 +612,7 @@ class SupportBot:
         elif data == "my_tickets":
             await self.show_user_tickets(query)
         elif data == "help":
-            await self.show_help_inline(query)
+            await self.show_help_inline(update, context)
         elif data.startswith("connect_"):
             await self.process_group_connection(query, data)
         elif data == "cancel_connection":
@@ -181,6 +631,11 @@ class SupportBot:
             await self.handle_take_ticket(query, context, data.split("_", 1)[1])
         elif data.startswith("close_"):
             await self.handle_close_ticket(query, context, data.split("_", 1)[1])
+
+    async def process_group_connection(self, query, data):
+        """Process group connection requests"""
+        # This is a placeholder - implement based on your connection logic
+        await query.edit_message_text("Group connection feature not implemented yet.")
 
     # -------------------------------------------------------------
     #  VIP Callback handler (Deriv / Currencies / Mentorship)
@@ -231,6 +686,11 @@ class SupportBot:
                 parse_mode="Markdown",
             )
             return
+
+    # -------------------------------------------------------------
+    #  Main text message handler (includes verification FSM)
+    # -------------------------------------------------------------
+    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # -------------------------------------------------------------
     #  Main text message handler (includes verification FSM)
