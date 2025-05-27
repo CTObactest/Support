@@ -37,8 +37,11 @@ class SupportBot:
         self.pending_tickets = {}
 
         # Admins from ENV
-        self.admin_ids = set(map(int, os.getenv("ADMINS", "").split(",")))
-      """FOREX‑Backtest tailored support bot"""
+        self.admin_ids = set(
+            map(int, os.getenv("ADMINS", "").split(","))
+        )
+        """FOREX-Backtest tailored support bot"""
+
 
     VIP_CR_WHITELIST = {
     "CR3648598",
