@@ -603,8 +603,9 @@ async def main():
     health_app = await create_health_server()
     
     # Start both servers concurrently
-    async def run_bot():
-        try:
+    # Start both servers concurrently
+async def run_bot():
+    try:
         await application.run_polling(
             allowed_updates=["message", "callback_query"],
             drop_pending_updates=True
@@ -613,6 +614,7 @@ async def main():
     except Exception as e:
         logger.error(f"Bot polling crashed: {e}")
         raise
+
 
 
     async def run_health_server():
