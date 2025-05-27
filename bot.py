@@ -29,7 +29,16 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 
 
 class SupportBot:
-    """FOREX‑Backtest tailored support bot"""
+    def __init__(self, bot_token: str, mongodb_uri: str):
+        self.bot_token = bot_token
+        self.mongodb_uri = mongodb_uri
+        self.db_client = None
+        self.db = None
+        self.pending_tickets = {}
+
+        # Admins from ENV
+        self.admin_ids = set(map(int, os.getenv("ADMINS", "").split(",")))
+      """FOREX‑Backtest tailored support bot"""
 
     VIP_CR_WHITELIST = {
     "CR3648598",
@@ -440,7 +449,91 @@ class SupportBot:
 
         logger.info("Database initialised")
 
-    async def get_support_groups(self):
+    async def connect_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.effective_user.id not in self.admin_ids:
+            await update.message.reply_text("❌ Only admins can use this command.")
+            return
+        group_id = update.effective_chat.id
+        group_name = update.effective_chat.title or "Unnamed"
+        existing = await self.db.groups.find_one({"group_id": group_id})
+        if existing:
+            await update.message.reply_text("Group already connected.")
+            return
+        await self.db.groups.insert_one({
+            "group_id": group_id,
+            "group_name": group_name,
+            "status": "active",
+            "connected_at": datetime.utcnow()
+        })
+        await update.message.reply_text(f"✅ Group '{group_name}' connected.")
+
+    async def disconnect_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.effective_user.id not in self.admin_ids:
+            await update.message.reply_text("❌ Only admins can use this command.")
+            return
+        group_id = update.effective_chat.id
+        result = await self.db.groups.delete_one({"group_id": group_id})
+        if result.deleted_count:
+            await update.message.reply_text("✅ Group disconnected.")
+        else:
+            await update.message.reply_text("Group not found.")
+
+    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not update.message or not update.message.text:
+            return
+
+        # Support reply detection
+        if update.effective_chat.type in ["group", "supergroup"] and update.message.reply_to_message:
+            reply_text = update.message.reply_to_message.text
+            match = re.search(r"\*\*ID:\*\* (TKT-\d{8}-\d{5})", reply_text)
+            if match:
+                ticket_id = match.group(1)
+                ticket = await self.db.tickets.find_one({"ticket_id": ticket_id})
+                if ticket and ticket.get("status") == "assigned":
+                    await self.db.tickets.update_one(
+                        {"ticket_id": ticket_id},
+                        {"$push": {"messages": {
+                            "from": update.effective_user.id,
+                            "text": update.message.text,
+                            "date": datetime.utcnow()
+                        }}, "$set": {"updated_at": datetime.utcnow()}}
+                    )
+                    await update.message.reply_text(
+                        f"💬 Reply recorded for ticket {ticket_id}.",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("✅ Mark as Solved", callback_data=f"solve_{ticket_id}")]
+                        ])
+                    )
+                    return
+
+    async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        data = query.data
+        if data.startswith("solve_"):
+            await self.mark_ticket_solved(query, data.replace("solve_", ""))
+
+    async def mark_ticket_solved(self, query, ticket_id: str):
+        ticket = await self.db.tickets.find_one({"ticket_id": ticket_id})
+        if not ticket:
+            await query.answer("Ticket not found.")
+            return
+        if ticket.get("status") == "closed":
+            await query.answer("Already closed.")
+            return
+        await self.db.tickets.update_one({"ticket_id": ticket_id}, {
+            "$set": {
+                "status": "closed",
+                "closed_by": query.from_user.id,
+                "closed_at": datetime.utcnow(),
+                "updated_at": datetime.utcnow()
+            }
+        })
+        await query.answer("Marked as solved.")
+        await query.edit_message_text(
+            f"✅ Ticket {ticket_id} marked as solved by @{query.from_user.username or query.from_user.first_name}",
+            parse_mode="Markdown"
+        )
+      async def get_support_groups(self):
         cursor = self.db.groups.find({"status": "active"})
         return await cursor.to_list(length=None)
 
