@@ -536,7 +536,7 @@ class SupportBot:
             f"✅ Ticket {ticket_id} marked as solved by @{query.from_user.username or query.from_user.first_name}",
             parse_mode="Markdown"
         )
-      async def get_support_groups(self):
+    async def get_support_groups(self):
         cursor = self.db.groups.find({"status": "active"})
         return await cursor.to_list(length=None)
 
