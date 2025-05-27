@@ -613,73 +613,59 @@ async def main():
 
     # Setup health check server
     health_app = await create_health_server()
-    
-    # Define bot and server runners
+    async def run_health_server(port: int = 8080) -> None:
+    health_app = web.Application()
+    health_app.add_routes([web.get("/health", lambda *_: web.Response(text="OK"))])
+
+    runner = web.AppRunner(health_app)
+    await runner.setup()
+    site = web.TCPSite(runner, host="0.0.0.0", port=port)
+    await site.start()
+    logger.info(f"Health check server running on port {port}")
+
+    # keep the server alive forever
+    while True:
+        await asyncio.sleep(3600)
+
+
+# ───────────────────────────────
+# 2.  TELEGRAM BOT
+# ───────────────────────────────
 async def run_bot() -> None:
+    logger.info("Initialising Telegram bot …")
+    await application.initialize()
+    await application.start()
+
+    # optional: allowed_updates / drop_pending_updates parameters
+    await application.updater.start_polling(
+        allowed_updates=["message", "callback_query"],
+        drop_pending_updates=True,
+        poll_interval=1.0,
+        timeout=10,
+    )
+    logger.info("Bot polling started ✓")
+
     try:
-        logger.info("Initialising Telegram bot …")
-        await application.initialize()          # prepare
-        await application.start()               # start receiving updates
-        await application.updater.start_polling(
-            allowed_updates=["message", "callback_query"],
-            drop_pending_updates=True,
-            poll_interval=1.0,
-            timeout=10
-        )
-        logger.info("Bot polling started ✓")
-
-        # Block here until a stop signal (Ctrl-C, SIGTERM, etc.)
-        await application.updater.idle()
-
+        await application.updater.idle()          # block until Ctrl-C/SIGTERM
     finally:
-        # Graceful shutdown
         logger.info("Stopping Telegram bot …")
         await application.updater.stop()
         await application.stop()
         await application.shutdown()
 
 
-
-    async def run_health_server():
-        try:
-            runner = web.AppRunner(health_app)
-            await runner.setup()
-            site = web.TCPSite(runner, '0.0.0.0', port)
-            await site.start()
-            logger.info(f"Health check server running on port {port}")
-            
-            # Keep the server running
-            while True:
-                await asyncio.sleep(3600)  # Sleep for 1 hour, then continue
-                
-        except Exception as e:
-            logger.error(f"Failed to start health server: {e}")
-            raise
-
-    # Run both concurrently
-    logger.info("Starting both bot and health server...")
-    try:
-        await asyncio.gather(
-            run_bot(),
-            run_health_server(),
-            return_exceptions=True
-        )
-    except Exception as e:
-        logger.error(f"Main execution failed: {e}")
-        raise
+# ───────────────────────────────
+# 3.  ORCHESTRATION
+# ───────────────────────────────
+async def main() -> None:
+    logger.info("Starting both bot and health server…")
+    await asyncio.gather(
+        run_bot(),
+        run_health_server(port=8080),
+    )
 
 if __name__ == "__main__":
-    import sys
-
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            logger.info("Detected running event loop. Creating a task for main()")
-            loop.create_task(main())
-        else:
-            loop.run_until_complete(main())
+        asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("Bot stopped by user")
-    except Exception as e:
-        logger.error(f"Bot crashed: {e}")
-        sys.exit(1)
