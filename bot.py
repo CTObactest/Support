@@ -602,20 +602,17 @@ async def main():
     # Setup health check server
     health_app = await create_health_server()
     
-    # Start both servers concurrently
-    # Start both servers concurrently
-async def run_bot():
-    try:
-        await application.run_polling(
-            allowed_updates=["message", "callback_query"],
-            drop_pending_updates=True
-        )
-        logger.info("Telegram bot polling exited normally")
-    except Exception as e:
-        logger.error(f"Bot polling crashed: {e}")
-        raise
-
-
+    # Define bot and server runners
+    async def run_bot():
+        try:
+            await application.run_polling(
+                allowed_updates=["message", "callback_query"],
+                drop_pending_updates=True
+            )
+            logger.info("Telegram bot polling exited normally")
+        except Exception as e:
+            logger.error(f"Bot polling crashed: {e}")
+            raise
 
     async def run_health_server():
         try:
@@ -624,6 +621,11 @@ async def run_bot():
             site = web.TCPSite(runner, '0.0.0.0', port)
             await site.start()
             logger.info(f"Health check server running on port {port}")
+            
+            # Keep the server running
+            while True:
+                await asyncio.sleep(3600)  # Sleep for 1 hour, then continue
+                
         except Exception as e:
             logger.error(f"Failed to start health server: {e}")
             raise
