@@ -611,14 +611,20 @@ async def main():
 
     logger.info("Handlers registered successfully")
 
-    # Setup health check server
+
+async def create_health_server() -> web.Application:
+    """Return an aiohttp application that exposes /health = OK."""
+    app = web.Application()
+    app.add_routes([web.get("/health", lambda *_: web.Response(text="OK"))])
+    return app
+
+async def run_health_server(port: int = 8080) -> None:
+    """Run the health-check server forever on the given port."""
     health_app = await create_health_server()
-    async def run_health_server(port: int = 8080) -> None:
-    health_app = web.Application()
-    health_app.add_routes([web.get("/health", lambda *_: web.Response(text="OK"))])
 
     runner = web.AppRunner(health_app)
     await runner.setup()
+
     site = web.TCPSite(runner, host="0.0.0.0", port=port)
     await site.start()
     logger.info(f"Health check server running on port {port}")
@@ -626,7 +632,6 @@ async def main():
     # keep the server alive forever
     while True:
         await asyncio.sleep(3600)
-
 
 # ───────────────────────────────
 # 2.  TELEGRAM BOT
