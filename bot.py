@@ -658,10 +658,17 @@ async def main():
         raise
 
 if __name__ == "__main__":
+    import sys
+
     try:
-        asyncio.run(main())
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            logger.info("Detected running event loop. Creating a task for main()")
+            loop.create_task(main())
+        else:
+            loop.run_until_complete(main())
     except KeyboardInterrupt:
         logger.info("Bot stopped by user")
     except Exception as e:
         logger.error(f"Bot crashed: {e}")
-        raise
+        sys.exit(1)
