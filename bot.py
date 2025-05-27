@@ -1004,6 +1004,29 @@ class SupportBot:
 #  Bot bootstrap (unchanged apart from registering new handlers)
 # =============================================================
 
+# Add this function after the SupportBot class definition
+
+async def health_check(request):
+    """Simple health check endpoint"""
+    return web.Response(text="OK", status=200)
+
+async def create_health_server():
+    """Create a simple health check server"""
+    app = web.Application()
+    app.router.add_get('/health', health_check)
+    app.router.add_get('/', health_check)  # Root path for basic health checks
+    
+    runner = web.AppRunner(app)
+    await runner.setup()
+    
+    port = int(os.getenv('PORT', 8080))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    logger.info(f"Health check server started on port {port}")
+    return runner
+
+# Modify the main_async_logic function to include the health server:
+
 async def main_async_logic():
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
     mongodb_uri = os.getenv("MONGODB_URI", "mongodb://localhost:27017/")
@@ -1013,6 +1036,9 @@ async def main_async_logic():
 
     support_bot = SupportBot(bot_token, mongodb_uri)
     await support_bot.init_database()
+
+    # Start health check server
+    health_runner = await create_health_server()
 
     app = Application.builder().token(bot_token).build()
 
@@ -1033,9 +1059,17 @@ async def main_async_logic():
     await app.start()
     logger.info("Bot started — polling mode active.")
 
-    # Simplified — polling only for this deployment
+    # Start polling
     await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
-    await asyncio.Event().wait()
+    
+    try:
+        await asyncio.Event().wait()
+    except KeyboardInterrupt:
+        logger.info("Shutting down...")
+    finally:
+        await health_runner.cleanup()
+        await app.stop()
+        await app.shutdown()
 
 
 if __name__ == "__main__":
